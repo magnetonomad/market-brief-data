@@ -1,0 +1,40 @@
+name: Market brief data
+
+on:
+  schedule:
+    - cron: "15 23 * * 1-5"
+    - cron: "15 3 * * 2-6"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: market-data
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build data
+        run: |
+          APP=$(find . -path ./.git -prune -o -path '*/job/run.py' -print | head -n 1)
+          if [ -z "$APP" ]; then
+            ZIP=$(find . -path ./.git -prune -o -name '*.zip' -print | head -n 1)
+            [ -n "$ZIP" ] && unzip -qo "$ZIP" -d /tmp/app && APP=$(find /tmp/app -path '*/job/run.py' | head -n 1)
+          fi
+          [ -n "$APP" ] || { echo "::error::Upload market-brief-job.zip to the repository first"; exit 1; }
+          cd "$(dirname "$(dirname "$APP")")"
+          pip install -q -r requirements.txt || pip install -q pandas numpy requests yfinance pytest
+          [ ! -d tests ] || python -m pytest -q tests
+          MB_OUT="$GITHUB_WORKSPACE/data" python -m job.run
+      - name: Save data
+        run: |
+          git config user.name "market-brief-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || { git commit -m "Data for $(jq -r .last_session data/status.json)"; git pull --rebase -q; git push; }
